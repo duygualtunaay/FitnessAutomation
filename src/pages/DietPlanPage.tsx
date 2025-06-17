@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Upload, 
@@ -14,9 +14,17 @@ import {
   Utensils,
   TrendingUp,
   AlertCircle,
-  Crown
+  Crown,
+  User,
+  ChevronDown,
+  ChevronUp,
+  ShoppingCart,
+  Activity
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { Link } from 'react-router-dom';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { generateDietPlanPDF } from '../utils/pdfGenerator';
 import toast from 'react-hot-toast';
 
@@ -28,23 +36,37 @@ interface BloodTestResult {
   status: 'normal' | 'high' | 'low';
 }
 
-interface DietPlan {
-  dailyCalories: number;
-  macros: {
+interface AICoachResponse {
+  strategicAnalysis: string;
+  macroNutrientPlan: {
+    dailyCalories: number;
     protein: number;
     carbs: number;
     fat: number;
+    reasoning: string;
   };
-  recommendations: string[];
-  restrictions: string[];
-  supplements: string[];
-  mealPlan: {
-    breakfast: string[];
-    lunch: string[];
-    dinner: string[];
-    snacks: string[];
+  weeklyNutritionPlan: {
+    [key: string]: {
+      breakfast: string[];
+      lunch: string[];
+      dinner: string[];
+      snacks: string[];
+      purpose: string;
+    };
   };
-  healthInsights: string[];
+  mealPrepGuide: {
+    title: string;
+    steps: string[];
+  };
+  shoppingList: {
+    [category: string]: string[];
+  };
+  progressMetrics: {
+    metric: string;
+    description: string;
+    target: string;
+  }[];
+  importantWarning: string;
 }
 
 const DietPlanPage: React.FC = () => {
@@ -52,22 +74,52 @@ const DietPlanPage: React.FC = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [bloodResults, setBloodResults] = useState<BloodTestResult[] | null>(null);
-  const [dietPlan, setDietPlan] = useState<DietPlan | null>(null);
+  const [aiResponse, setAiResponse] = useState<AICoachResponse | null>(null);
   const [analysisStep, setAnalysisStep] = useState<'upload' | 'analyzing' | 'results'>('upload');
+  const [expandedSections, setExpandedSections] = useState<{[key: string]: boolean}>({
+    strategic: true,
+    macro: false,
+    weekly: false,
+    mealprep: false,
+    shopping: false,
+    metrics: false
+  });
 
   // Check if user has premium access
   const hasPremiumAccess = user?.membershipPlan === 'premium' || user?.membershipPlan === 'ai-plus';
 
+  // Check if profile is complete
+  const isProfileComplete = user?.physicalInfo && user?.goals;
+
+  useEffect(() => {
+    // Load existing AI response if available
+    const loadExistingPlan = async () => {
+      if (user && hasPremiumAccess && isProfileComplete) {
+        try {
+          const planDoc = await getDoc(doc(db, 'users', user.id, 'aiPlans', 'currentDietPlan'));
+          if (planDoc.exists()) {
+            const data = planDoc.data();
+            setAiResponse(data.aiResponse);
+            setBloodResults(data.bloodResults);
+            setAnalysisStep('results');
+          }
+        } catch (error) {
+          console.error('Error loading existing plan:', error);
+        }
+      }
+    };
+
+    loadExistingPlan();
+  }, [user, hasPremiumAccess, isProfileComplete]);
+
   const handleFileUpload = (file: File) => {
     if (!file) return;
 
-    // Validate file type
     if (file.type !== 'application/pdf') {
       toast.error('Lütfen sadece PDF dosyası yükleyin');
       return;
     }
 
-    // Validate file size (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
       toast.error('Dosya boyutu 10MB\'dan küçük olmalıdır');
       return;
@@ -77,9 +129,159 @@ const DietPlanPage: React.FC = () => {
     toast.success('Kan tahlili başarıyla yüklendi!');
   };
 
+  const generateAIResponse = (bloodResults: BloodTestResult[]): AICoachResponse => {
+    // Simulate AI analysis based on user data and blood results
+    const hasHighGlucose = bloodResults.some(r => r.parameter.includes('Glukoz') && r.status === 'high');
+    const hasHighCholesterol = bloodResults.some(r => r.parameter.includes('Kolesterol') && r.status === 'high');
+    const hasLowVitaminD = bloodResults.some(r => r.parameter.includes('Vitamin D') && r.status === 'low');
+
+    return {
+      strategicAnalysis: `Mevcut kan tahlili sonuçlarınız ve fiziksel verileriniz analiz edildiğinde, ${user?.goals?.primaryGoal} hedefinize ulaşmak için stratejik bir yaklaşım gerekiyor. ${hasHighGlucose ? 'Glukoz seviyenizin yüksek olması nedeniyle karbonhidrat alımınızı kontrol etmemiz kritik.' : ''} ${hasHighCholesterol ? 'Kolesterol seviyenizi düşürmek için omega-3 açısından zengin gıdalar ve doymuş yağ kısıtlaması önemli.' : ''} ${hasLowVitaminD ? 'Vitamin D eksikliğiniz kas gelişimi ve metabolizmayı olumsuz etkileyebilir.' : ''} Mevcut ${user?.physicalInfo?.weight}kg kilonuzdan ${user?.goals?.targetWeight || 'hedef'}kg'a ulaşmak için günlük kalori dengesini optimize edeceğiz.`,
+      
+      macroNutrientPlan: {
+        dailyCalories: hasHighGlucose ? 1650 : 1800,
+        protein: hasHighGlucose ? 35 : 30,
+        carbs: hasHighGlucose ? 35 : 40,
+        fat: 30,
+        reasoning: `${user?.physicalInfo?.age} yaş, ${user?.physicalInfo?.height}cm boy ve ${user?.physicalInfo?.weight}kg kilo verilerinize göre hesaplanmış makro dağılım. ${hasHighGlucose ? 'Glukoz kontrolü için protein oranı artırıldı.' : ''}`
+      },
+
+      weeklyNutritionPlan: {
+        'Pazartesi (Göğüs & Triceps)': {
+          breakfast: ['Yulaf ezmesi (50g) + protein tozu (25g)', 'Yaban mersini (1 avuç)', 'Badem (8-10 adet)', 'Yeşil çay'],
+          lunch: ['Izgara tavuk göğsü (150g)', 'Kinoa (80g)', 'Brokoli salatası', 'Zeytinyağı (1 yemek kaşığı)'],
+          dinner: ['Somon (120g)', 'Tatlı patates (100g)', 'Ispanak salatası', 'Avokado (1/2 adet)'],
+          snacks: ['Protein bar', 'Elma + fıstık ezmesi'],
+          purpose: 'Antrenman günü için yüksek protein ve karmaşık karbonhidrat'
+        },
+        'Salı (Sırt & Biceps)': {
+          breakfast: ['Omlet (2 yumurta + 1 beyaz)', 'Tam buğday ekmeği (1 dilim)', 'Domates, salatalık', 'Kahve'],
+          lunch: ['Izgara hindi (130g)', 'Bulgur pilavı (60g)', 'Mevsim salatası', 'Ceviz (5 adet)'],
+          dinner: ['Levrek (150g)', 'Quinoa (70g)', 'Karışık sebze', 'Zeytinyağı'],
+          snacks: ['Yoğurt + chia tohumu', 'Havuç çubukları'],
+          purpose: 'Kas onarımı için yüksek protein, antioksidan açısından zengin'
+        },
+        'Çarşamba (Dinlenme)': {
+          breakfast: ['Chia pudding + meyve', 'Badem sütü', 'Bal (1 tatlı kaşığı)'],
+          lunch: ['Mercimek çorbası', 'Izgara sebze', 'Tam tahıllı ekmek', 'Zeytinyağı'],
+          dinner: ['Tavuk salatası', 'Kinoa', 'Avokado', 'Limon sosu'],
+          snacks: ['Meyve salatası', 'Fındık (8 adet)'],
+          purpose: 'Dinlenme günü için hafif, sindirimi kolay besinler'
+        },
+        'Perşembe (Bacak)': {
+          breakfast: ['Protein smoothie (muz + protein tozu)', 'Yulaf (40g)', 'Ceviz', 'Süt'],
+          lunch: ['Izgara biftek (120g)', 'Tatlı patates (120g)', 'Roka salatası', 'Zeytinyağı'],
+          dinner: ['Somon (130g)', 'Esmer pirinç (60g)', 'Buharda sebze', 'Avokado'],
+          snacks: ['Protein bar', 'Muz + badem ezmesi'],
+          purpose: 'Yoğun bacak antrenmanı için ekstra karbonhidrat ve protein'
+        },
+        'Cuma (Omuz & Abs)': {
+          breakfast: ['Haşlanmış yumurta (2 adet)', 'Avokado toast', 'Domates', 'Yeşil çay'],
+          lunch: ['Izgara tavuk (140g)', 'Bulgur salatası', 'Mevsim yeşillikleri', 'Ceviz'],
+          dinner: ['Uskumru (120g)', 'Quinoa (70g)', 'Karışık salata', 'Zeytinyağı'],
+          snacks: ['Yoğurt + meyve', 'Badem (10 adet)'],
+          purpose: 'Omega-3 açısından zengin, kas tanımı için optimize edilmiş'
+        },
+        'Cumartesi (Cardio)': {
+          breakfast: ['Meyve salatası', 'Yoğurt', 'Granola (30g)', 'Bal'],
+          lunch: ['Sebze çorbası', 'Izgara balık', 'Salata', 'Zeytinyağı'],
+          dinner: ['Tavuk salatası', 'Kinoa', 'Avokado', 'Limon'],
+          snacks: ['Smoothie', 'Fındık'],
+          purpose: 'Kardiyovasküler aktivite için hafif, enerji verici'
+        },
+        'Pazar (Dinlenme)': {
+          breakfast: ['Pancake (yulaf unu)', 'Meyve', 'Bal', 'Kahve'],
+          lunch: ['Sebze yemeği', 'Pirinç', 'Salata', 'Yoğurt'],
+          dinner: ['Izgara balık', 'Sebze', 'Bulgur', 'Zeytinyağı'],
+          snacks: ['Meyve', 'Kuruyemiş karışımı'],
+          purpose: 'Hafta sonu rahatlaması, esnek beslenme'
+        }
+      },
+
+      mealPrepGuide: {
+        title: 'Pazar Günü Meal Prep Rehberi',
+        steps: [
+          '1. Protein Hazırlığı: 1kg tavuk göğsünü marine edin ve fırında pişirin, porsiyonlara ayırın',
+          '2. Karbonhidrat Hazırlığı: Quinoa ve bulguru haşlayın, buzdolabı kaplarına paylaştırın',
+          '3. Sebze Hazırlığı: Brokoli, karnabahar ve havuçları doğrayın, buharda pişirin',
+          '4. Salata Hazırlığı: Yeşillikleri yıkayın, kurulayın ve hava geçirmez kaplarda saklayın',
+          '5. Snack Hazırlığı: Protein topları yapın (hurma + badem + protein tozu)',
+          '6. Soslar: Zeytinyağlı limon sosu ve avokado sosu hazırlayın',
+          '7. Porsiyon Kontrolü: Her öğünü ayrı kaplara paylaştırın ve etiketleyin'
+        ]
+      },
+
+      shoppingList: {
+        'Protein Kaynakları': [
+          'Tavuk göğsü (1kg)',
+          'Somon fileto (500g)',
+          'Yumurta (30 adet)',
+          'Protein tozu (1 kutu)',
+          'Yoğurt (1kg)',
+          'Badem (500g)',
+          'Ceviz (300g)'
+        ],
+        'Karbonhidrat Kaynakları': [
+          'Quinoa (500g)',
+          'Yulaf ezmesi (1kg)',
+          'Tatlı patates (1kg)',
+          'Esmer pirinç (500g)',
+          'Tam buğday ekmeği (1 paket)'
+        ],
+        'Sebze & Meyve': [
+          'Brokoli (2 adet)',
+          'Ispanak (500g)',
+          'Avokado (6 adet)',
+          'Muz (1 demet)',
+          'Yaban mersini (250g)',
+          'Domates (1kg)',
+          'Salatalık (5 adet)'
+        ],
+        'Yağ Kaynakları': [
+          'Zeytinyağı (500ml)',
+          'Badem ezmesi (1 kavanoz)',
+          'Chia tohumu (200g)',
+          'Fındık (300g)'
+        ],
+        'Diğer': [
+          'Yeşil çay (1 kutu)',
+          'Kahve (250g)',
+          'Bal (1 kavanoz)',
+          'Limon (5 adet)',
+          'Baharat karışımı'
+        ]
+      },
+
+      progressMetrics: [
+        {
+          metric: 'Sabah Enerji Seviyesi',
+          description: 'Her sabah uyanışta 1-10 arası enerji seviyenizi değerlendirin',
+          target: '7+ seviye hedefleniyor'
+        },
+        {
+          metric: 'Haftalık Ortalama Uyku Süresi',
+          description: 'Günlük uyku saatlerinizi kaydedin ve haftalık ortalamasını hesaplayın',
+          target: '7-8 saat arası optimal'
+        },
+        {
+          metric: 'Bel Çevresi Ölçümü',
+          description: 'Haftada 2 kez, aynı saatte ve aç karnına bel çevrenizi ölçün',
+          target: `${user?.physicalInfo?.gender === 'male' ? '90cm altı' : '80cm altı'} hedefleniyor`
+        }
+      ],
+
+      importantWarning: 'ÖNEMLİ UYARI: Bu plan, sağlık verileriniz ve hedefleriniz doğrultusunda AI tarafından kişiselleştirilmiştir ancak tıbbi bir tedavi değildir. Uygulamadan önce mutlaka bir doktor ve diyetisyene danışınız. Herhangi bir sağlık problemi yaşarsanız derhal uzman desteği alınız.'
+    };
+  };
+
   const analyzeBloodTest = async () => {
     if (!uploadedFile) {
       toast.error('Lütfen önce kan tahlili dosyasını yükleyin');
+      return;
+    }
+
+    if (!isProfileComplete) {
+      toast.error('Lütfen önce profil bilgilerinizi tamamlayın');
       return;
     }
 
@@ -87,115 +289,58 @@ const DietPlanPage: React.FC = () => {
     setAnalysisStep('analyzing');
 
     try {
-      // Simulate real e-Nabız PDF processing
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      // Simulate processing time
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
-      // Simulate processing e-Nabız specific format
-      const eNabizBloodResults: BloodTestResult[] = [
-        { parameter: 'Glukoz (Açlık)', value: 105, unit: 'mg/dL', normalRange: '70-100', status: 'high' },
-        { parameter: 'HbA1c', value: 5.8, unit: '%', normalRange: '<5.7', status: 'high' },
-        { parameter: 'Total Kolesterol', value: 220, unit: 'mg/dL', normalRange: '<200', status: 'high' },
-        { parameter: 'LDL Kolesterol', value: 145, unit: 'mg/dL', normalRange: '<100', status: 'high' },
-        { parameter: 'HDL Kolesterol', value: 45, unit: 'mg/dL', normalRange: '>40', status: 'normal' },
-        { parameter: 'Trigliserit', value: 180, unit: 'mg/dL', normalRange: '<150', status: 'high' },
-        { parameter: 'Hemoglobin', value: 14.2, unit: 'g/dL', normalRange: '12.0-15.5', status: 'normal' },
-        { parameter: '25-OH Vitamin D', value: 18, unit: 'ng/mL', normalRange: '30-100', status: 'low' },
-        { parameter: 'Vitamin B12', value: 350, unit: 'pg/mL', normalRange: '200-900', status: 'normal' },
-        { parameter: 'Ferritin', value: 85, unit: 'ng/mL', normalRange: '15-150', status: 'normal' },
-        { parameter: 'TSH', value: 2.8, unit: 'mIU/L', normalRange: '0.27-4.2', status: 'normal' },
-        { parameter: 'Kreatinin', value: 0.9, unit: 'mg/dL', normalRange: '0.7-1.3', status: 'normal' }
+      // Generate mock blood results
+      const mockBloodResults: BloodTestResult[] = [
+        { parameter: 'Glukoz (Açlık)', value: 95, unit: 'mg/dL', normalRange: '70-100', status: 'normal' },
+        { parameter: 'HbA1c', value: 5.4, unit: '%', normalRange: '<5.7', status: 'normal' },
+        { parameter: 'Total Kolesterol', value: 180, unit: 'mg/dL', normalRange: '<200', status: 'normal' },
+        { parameter: 'LDL Kolesterol', value: 110, unit: 'mg/dL', normalRange: '<100', status: 'high' },
+        { parameter: 'HDL Kolesterol', value: 55, unit: 'mg/dL', normalRange: '>40', status: 'normal' },
+        { parameter: 'Trigliserit', value: 120, unit: 'mg/dL', normalRange: '<150', status: 'normal' },
+        { parameter: '25-OH Vitamin D', value: 25, unit: 'ng/mL', normalRange: '30-100', status: 'low' },
+        { parameter: 'Vitamin B12', value: 450, unit: 'pg/mL', normalRange: '200-900', status: 'normal' },
+        { parameter: 'Ferritin', value: 95, unit: 'ng/mL', normalRange: '15-150', status: 'normal' },
+        { parameter: 'TSH', value: 2.1, unit: 'mIU/L', normalRange: '0.27-4.2', status: 'normal' }
       ];
 
-      // Generate personalized diet plan based on real blood results
-      const personalizedDietPlan: DietPlan = {
-        dailyCalories: 1750,
-        macros: {
-          protein: 28, // Higher protein for better glucose control
-          carbs: 40,   // Reduced carbs due to high glucose
-          fat: 32      // Moderate healthy fats
-        },
-        recommendations: [
-          'Düşük glisemik indeksli karbonhidratları tercih edin (kinoa, yulaf, tam buğday)',
-          'Omega-3 açısından zengin balık tüketin (somon, uskumru, sardalya)',
-          'Günde en az 7-8 porsiyon sebze ve meyve tüketin',
-          'İşlenmiş gıdalardan ve şekerli içeceklerden kaçının',
-          'Bol su için (günde 2.5-3 litre)',
-          'Öğünleri düzenli aralıklarla tüketin (3 ana + 2 ara öğün)',
-          'Posa açısından zengin gıdaları tercih edin'
-        ],
-        restrictions: [
-          'Basit şekerler ve şekerli içecekleri tamamen kısıtlayın',
-          'Doymuş yağları günlük kalorinin %7\'sinden az tutun',
-          'Tuz tüketimini günde 5g ile sınırlayın',
-          'Alkol tüketimini minimize edin',
-          'Trans yağ içeren gıdalardan kaçının',
-          'Yüksek glisemik indeksli gıdaları sınırlayın'
-        ],
-        supplements: [
-          'Vitamin D3 (2000-4000 IU/gün) - Eksiklik nedeniyle',
-          'Omega-3 (1000-2000mg/gün) - Kolesterol kontrolü için',
-          'Magnezyum (400mg/gün) - Glukoz metabolizması için',
-          'Krom Pikolinat (200mcg/gün) - İnsülin duyarlılığı için'
-        ],
-        mealPlan: {
-          breakfast: [
-            'Yulaf ezmesi (40g) + ceviz (5 adet) + yaban mersini (1 avuç)',
-            'Haşlanmış yumurta (2 adet) veya omlet',
-            'Yeşil çay (şekersiz)',
-            'Tam tahıllı ekmek (1 dilim) + avokado'
-          ],
-          lunch: [
-            'Izgara somon (120g) veya tavuk göğsü',
-            'Kinoa salatası (bulgur yerine)',
-            'Zeytinyağlı brokoli ve karnabahar',
-            'Mevsim yeşillikleri salatası',
-            'Ayran (şekersiz) veya buttermilk'
-          ],
-          dinner: [
-            'Izgara tavuk göğsü (100g) veya hindi',
-            'Bulgur pilavı (küçük porsiyon)',
-            'Zeytinyağlı taze fasulye',
-            'Çoban salatası (az tuz)',
-            'Kefir (1 bardak)'
-          ],
-          snacks: [
-            'Badem (10-12 adet) + elma (1 adet)',
-            'Yoğurt (şekersiz) + chia tohumu',
-            'Havuç çubukları + humus',
-            'Fındık (8-10 adet) + armut'
-          ]
-        },
-        healthInsights: [
-          'Glukoz seviyeniz hafif yüksek (105 mg/dL) - Karbonhidrat alımınızı kontrol edin ve düzenli egzersiz yapın',
-          'HbA1c değeriniz (5.8%) prediabet sınırında - Yaşam tarzı değişiklikleri kritik',
-          'Total kolesterol (220 mg/dL) ve LDL (145 mg/dL) yüksek - Doymuş yağları azaltın, omega-3 artırın',
-          'Trigliserit seviyeniz yüksek (180 mg/dL) - Şeker ve basit karbonhidrat tüketimini azaltın',
-          'Vitamin D eksikliğiniz var (18 ng/mL) - Güneş ışığından yararlanın ve D vitamini takviyesi alın',
-          'Metabolik sendrom riski mevcut - Kilo kontrolü ve düzenli egzersiz önemli'
-        ]
-      };
+      // Generate AI response
+      const aiCoachResponse = generateAIResponse(mockBloodResults);
 
-      setBloodResults(eNabizBloodResults);
-      setDietPlan(personalizedDietPlan);
+      setBloodResults(mockBloodResults);
+      setAiResponse(aiCoachResponse);
       setAnalysisStep('results');
+
+      // Save to Firestore
+      if (user) {
+        await setDoc(doc(db, 'users', user.id, 'aiPlans', 'currentDietPlan'), {
+          aiResponse: aiCoachResponse,
+          bloodResults: mockBloodResults,
+          createdAt: new Date(),
+          userId: user.id
+        });
+      }
+
       setIsAnalyzing(false);
-      toast.success('e-Nabız kan tahlili analizi tamamlandı!');
+      toast.success('AI Koç analizi tamamlandı!');
     } catch (error) {
-      toast.error('Kan tahlili analiz edilirken bir hata oluştu');
+      toast.error('Analiz sırasında bir hata oluştu');
       setIsAnalyzing(false);
       setAnalysisStep('upload');
     }
   };
 
-  const downloadDietPlanPDF = () => {
-    if (!dietPlan || !bloodResults || !user) {
+  const downloadAIPlanPDF = () => {
+    if (!aiResponse || !bloodResults || !user) {
       toast.error('PDF oluşturmak için gerekli veriler eksik');
       return;
     }
 
     try {
-      generateDietPlanPDF(dietPlan, bloodResults, user.name);
-      toast.success('Beslenme planınız PDF olarak indirildi!');
+      generateDietPlanPDF(aiResponse, bloodResults, user.name);
+      toast.success('AI Koç planınız PDF olarak indirildi!');
     } catch (error) {
       toast.error('PDF oluşturulurken bir hata oluştu');
     }
@@ -204,8 +349,15 @@ const DietPlanPage: React.FC = () => {
   const resetAnalysis = () => {
     setUploadedFile(null);
     setBloodResults(null);
-    setDietPlan(null);
+    setAiResponse(null);
     setAnalysisStep('upload');
+  };
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
   };
 
   if (!hasPremiumAccess) {
@@ -226,22 +378,21 @@ const DietPlanPage: React.FC = () => {
                 Premium Özellik
               </h1>
               <p className="text-gray-400 text-lg mb-8">
-                AI Beslenme Uzmanı özelliği Premium ve AI Plus planlarında mevcuttur. 
-                e-Nabız kan tahlili analizi ve kişiselleştirilmiş diyet planları için üyeliğinizi yükseltin.
+                AI Performans ve Beslenme Koçu özelliği Premium ve AI Plus planlarında mevcuttur.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <a
-                  href="/uyelik-paketleri"
+                <Link
+                  to="/uyelik-paketleri"
                   className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105"
                 >
                   Planları İncele
-                </a>
-                <a
-                  href="/dashboard"
+                </Link>
+                <Link
+                  to="/dashboard"
                   className="border-2 border-gray-600 hover:border-gray-500 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 hover:bg-gray-800"
                 >
                   Dashboard'a Dön
-                </a>
+                </Link>
               </div>
             </div>
           </motion.div>
@@ -250,7 +401,48 @@ const DietPlanPage: React.FC = () => {
     );
   }
 
-  if (analysisStep === 'results' && dietPlan && bloodResults) {
+  if (!isProfileComplete) {
+    return (
+      <div className="min-h-screen bg-gray-900 py-8">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            className="text-center"
+          >
+            <div className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-12">
+              <div className="w-24 h-24 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <User className="h-12 w-12 text-white" />
+              </div>
+              <h1 className="text-3xl font-bold text-white mb-4">
+                Profil Tamamlanması Gerekli
+              </h1>
+              <p className="text-gray-400 text-lg mb-8">
+                AI Koçunuzun size en uygun planı hazırlayabilmesi için öncelikle profil bilgilerinizi tamamlamanız gerekiyor.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <Link
+                  to="/profil-ve-hedefler"
+                  className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105"
+                >
+                  Profili Tamamla
+                </Link>
+                <Link
+                  to="/dashboard"
+                  className="border-2 border-gray-600 hover:border-gray-500 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 hover:bg-gray-800"
+                >
+                  Dashboard'a Dön
+                </Link>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
+  if (analysisStep === 'results' && aiResponse && bloodResults) {
     return (
       <div className="min-h-screen bg-gray-900 py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -261,223 +453,266 @@ const DietPlanPage: React.FC = () => {
             className="text-center mb-8"
           >
             <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Kişiselleştirilmiş <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">Beslenme Planınız</span>
+              AI Performans ve <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">Beslenme Koçu</span>
             </h1>
             <p className="text-gray-400 text-lg">
-              e-Nabız kan tahlili sonuçlarınıza göre hazırlanmış özel diyet programınız
+              Kişiselleştirilmiş 8 adımlı koçluk planınız hazır
             </p>
           </motion.div>
 
-          {/* Key Metrics */}
-          <div className="grid md:grid-cols-4 gap-6 mb-8">
+          <div className="space-y-6">
+            {/* Strategic Analysis */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1 }}
-              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-xl p-6 text-center"
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
             >
-              <Target className="h-8 w-8 text-blue-400 mx-auto mb-3" />
-              <div className="text-2xl font-bold text-white mb-1">{dietPlan.dailyCalories}</div>
-              <div className="text-gray-400 text-sm">Günlük Kalori</div>
+              <button
+                onClick={() => toggleSection('strategic')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="flex items-center space-x-3">
+                  <TrendingUp className="h-6 w-6 text-blue-400" />
+                  <h3 className="text-xl font-bold text-white">1. Stratejik Analiz ve Yol Haritası</h3>
+                </div>
+                {expandedSections.strategic ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.strategic && (
+                <div className="px-6 pb-6">
+                  <p className="text-gray-300 leading-relaxed">{aiResponse.strategicAnalysis}</p>
+                </div>
+              )}
             </motion.div>
+
+            {/* Macro Nutrient Plan */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.2 }}
-              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-xl p-6 text-center"
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
             >
-              <Apple className="h-8 w-8 text-green-400 mx-auto mb-3" />
-              <div className="text-2xl font-bold text-white mb-1">{dietPlan.macros.protein}%</div>
-              <div className="text-gray-400 text-sm">Protein</div>
+              <button
+                onClick={() => toggleSection('macro')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="flex items-center space-x-3">
+                  <Target className="h-6 w-6 text-green-400" />
+                  <h3 className="text-xl font-bold text-white">2. Hedef Odaklı Makro Besin Planı</h3>
+                </div>
+                {expandedSections.macro ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.macro && (
+                <div className="px-6 pb-6">
+                  <div className="grid md:grid-cols-4 gap-4 mb-4">
+                    <div className="bg-gray-700/30 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-400">{aiResponse.macroNutrientPlan.dailyCalories}</div>
+                      <div className="text-gray-400 text-sm">Günlük Kalori</div>
+                    </div>
+                    <div className="bg-gray-700/30 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-green-400">{aiResponse.macroNutrientPlan.protein}%</div>
+                      <div className="text-gray-400 text-sm">Protein</div>
+                    </div>
+                    <div className="bg-gray-700/30 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-yellow-400">{aiResponse.macroNutrientPlan.carbs}%</div>
+                      <div className="text-gray-400 text-sm">Karbonhidrat</div>
+                    </div>
+                    <div className="bg-gray-700/30 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-purple-400">{aiResponse.macroNutrientPlan.fat}%</div>
+                      <div className="text-gray-400 text-sm">Yağ</div>
+                    </div>
+                  </div>
+                  <p className="text-gray-300">{aiResponse.macroNutrientPlan.reasoning}</p>
+                </div>
+              )}
             </motion.div>
+
+            {/* Weekly Nutrition Plan */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.3 }}
-              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-xl p-6 text-center"
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
             >
-              <Utensils className="h-8 w-8 text-yellow-400 mx-auto mb-3" />
-              <div className="text-2xl font-bold text-white mb-1">{dietPlan.macros.carbs}%</div>
-              <div className="text-gray-400 text-sm">Karbonhidrat</div>
+              <button
+                onClick={() => toggleSection('weekly')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="flex items-center space-x-3">
+                  <Calendar className="h-6 w-6 text-purple-400" />
+                  <h3 className="text-xl font-bold text-white">3. Dinamik Haftalık Beslenme Planı</h3>
+                </div>
+                {expandedSections.weekly ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.weekly && (
+                <div className="px-6 pb-6">
+                  <div className="space-y-6">
+                    {Object.entries(aiResponse.weeklyNutritionPlan).map(([day, plan], index) => (
+                      <div key={index} className="bg-gray-700/30 rounded-lg p-4">
+                        <h4 className="text-lg font-semibold text-white mb-2">{day}</h4>
+                        <p className="text-blue-400 text-sm mb-3">{plan.purpose}</p>
+                        <div className="grid md:grid-cols-4 gap-4">
+                          <div>
+                            <h5 className="font-medium text-green-400 mb-2">Kahvaltı</h5>
+                            <ul className="text-sm text-gray-300 space-y-1">
+                              {plan.breakfast.map((item, i) => (
+                                <li key={i}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <h5 className="font-medium text-yellow-400 mb-2">Öğle</h5>
+                            <ul className="text-sm text-gray-300 space-y-1">
+                              {plan.lunch.map((item, i) => (
+                                <li key={i}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <h5 className="font-medium text-orange-400 mb-2">Akşam</h5>
+                            <ul className="text-sm text-gray-300 space-y-1">
+                              {plan.dinner.map((item, i) => (
+                                <li key={i}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <h5 className="font-medium text-purple-400 mb-2">Ara Öğün</h5>
+                            <ul className="text-sm text-gray-300 space-y-1">
+                              {plan.snacks.map((item, i) => (
+                                <li key={i}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
+
+            {/* Meal Prep Guide */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.4 }}
-              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-xl p-6 text-center"
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
             >
-              <TrendingUp className="h-8 w-8 text-purple-400 mx-auto mb-3" />
-              <div className="text-2xl font-bold text-white mb-1">{dietPlan.macros.fat}%</div>
-              <div className="text-gray-400 text-sm">Yağ</div>
+              <button
+                onClick={() => toggleSection('mealprep')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="flex items-center space-x-3">
+                  <Clock className="h-6 w-6 text-orange-400" />
+                  <h3 className="text-xl font-bold text-white">4. {aiResponse.mealPrepGuide.title}</h3>
+                </div>
+                {expandedSections.mealprep ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.mealprep && (
+                <div className="px-6 pb-6">
+                  <div className="space-y-3">
+                    {aiResponse.mealPrepGuide.steps.map((step, index) => (
+                      <div key={index} className="flex items-start space-x-3">
+                        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-white text-xs font-bold mt-0.5">
+                          {index + 1}
+                        </div>
+                        <p className="text-gray-300">{step.substring(2)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
-          </div>
 
-          <div className="grid lg:grid-cols-3 gap-8">
-            {/* Left Column - Blood Results & Health Insights */}
-            <div className="lg:col-span-1 space-y-6">
-              {/* Blood Test Results */}
-              <motion.div
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.8 }}
-                className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
+            {/* Shopping List */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.5 }}
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
+            >
+              <button
+                onClick={() => toggleSection('shopping')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
               >
-                <h3 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                  <FileText className="h-6 w-6 text-blue-400" />
-                  <span>e-Nabız Kan Tahlili</span>
-                </h3>
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {bloodResults.map((result, index) => (
-                    <div key={index} className="flex justify-between items-center py-2 border-b border-gray-700/50 last:border-b-0">
-                      <div>
-                        <div className="text-white font-medium text-sm">{result.parameter}</div>
-                        <div className="text-gray-400 text-xs">{result.normalRange}</div>
+                <div className="flex items-center space-x-3">
+                  <ShoppingCart className="h-6 w-6 text-pink-400" />
+                  <h3 className="text-xl font-bold text-white">5. Haftalık Alışveriş Listesi</h3>
+                </div>
+                {expandedSections.shopping ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.shopping && (
+                <div className="px-6 pb-6">
+                  <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {Object.entries(aiResponse.shoppingList).map(([category, items], index) => (
+                      <div key={index} className="bg-gray-700/30 rounded-lg p-4">
+                        <h4 className="font-semibold text-pink-400 mb-3">{category}</h4>
+                        <ul className="text-sm text-gray-300 space-y-1">
+                          {items.map((item, i) => (
+                            <li key={i}>• {item}</li>
+                          ))}
+                        </ul>
                       </div>
-                      <div className="text-right">
-                        <div className={`font-semibold text-sm ${
-                          result.status === 'normal' ? 'text-green-400' :
-                          result.status === 'high' ? 'text-red-400' : 'text-yellow-400'
-                        }`}>
-                          {result.value} {result.unit}
-                        </div>
-                        <div className={`text-xs ${
-                          result.status === 'normal' ? 'text-green-400' :
-                          result.status === 'high' ? 'text-red-400' : 'text-yellow-400'
-                        }`}>
-                          {result.status === 'normal' ? 'Normal' :
-                           result.status === 'high' ? 'Yüksek' : 'Düşük'}
-                        </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </motion.div>
+
+            {/* Progress Metrics */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.6 }}
+              className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl overflow-hidden"
+            >
+              <button
+                onClick={() => toggleSection('metrics')}
+                className="w-full p-6 text-left flex items-center justify-between hover:bg-gray-700/30 transition-colors"
+              >
+                <div className="flex items-center space-x-3">
+                  <Activity className="h-6 w-6 text-cyan-400" />
+                  <h3 className="text-xl font-bold text-white">6. İlerleme Takibi İçin Metrikler</h3>
+                </div>
+                {expandedSections.metrics ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+              </button>
+              {expandedSections.metrics && (
+                <div className="px-6 pb-6">
+                  <div className="grid md:grid-cols-3 gap-6">
+                    {aiResponse.progressMetrics.map((metric, index) => (
+                      <div key={index} className="bg-gray-700/30 rounded-lg p-4">
+                        <h4 className="font-semibold text-cyan-400 mb-2">{metric.metric}</h4>
+                        <p className="text-gray-300 text-sm mb-2">{metric.description}</p>
+                        <p className="text-green-400 text-sm font-medium">{metric.target}</p>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-
-              {/* Health Insights */}
-              <motion.div
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.8, delay: 0.2 }}
-                className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
-              >
-                <h3 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                  <AlertCircle className="h-6 w-6 text-yellow-400" />
-                  <span>Sağlık Öngörüleri</span>
-                </h3>
-                <div className="space-y-3 max-h-64 overflow-y-auto">
-                  {dietPlan.healthInsights.map((insight, index) => (
-                    <div key={index} className="flex items-start space-x-3">
-                      <div className="w-2 h-2 bg-yellow-400 rounded-full mt-2 flex-shrink-0"></div>
-                      <p className="text-gray-300 text-sm leading-relaxed">{insight}</p>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            </div>
-
-            {/* Right Column - Diet Plan */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Meal Plan */}
-              <motion.div
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.8 }}
-                className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
-              >
-                <h3 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                  <Calendar className="h-6 w-6 text-green-400" />
-                  <span>Günlük Öğün Planı</span>
-                </h3>
-                <div className="grid md:grid-cols-2 gap-6">
-                  {Object.entries(dietPlan.mealPlan).map(([mealType, foods], index) => (
-                    <div key={mealType} className="bg-gray-700/30 rounded-xl p-4">
-                      <h4 className="text-lg font-semibold text-white mb-3 capitalize">
-                        {mealType === 'breakfast' ? 'Kahvaltı' :
-                         mealType === 'lunch' ? 'Öğle Yemeği' :
-                         mealType === 'dinner' ? 'Akşam Yemeği' : 'Ara Öğünler'}
-                      </h4>
-                      <ul className="space-y-2">
-                        {foods.map((food, foodIndex) => (
-                          <li key={foodIndex} className="flex items-start space-x-2">
-                            <div className="w-1.5 h-1.5 bg-green-400 rounded-full mt-2 flex-shrink-0"></div>
-                            <span className="text-gray-300 text-sm">{food}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-
-              {/* Recommendations & Restrictions */}
-              <div className="grid md:grid-cols-2 gap-6">
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.8, delay: 0.3 }}
-                  className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
-                >
-                  <h3 className="text-lg font-bold text-white mb-4 flex items-center space-x-2">
-                    <CheckCircle className="h-5 w-5 text-green-400" />
-                    <span>Öneriler</span>
-                  </h3>
-                  <ul className="space-y-2 max-h-48 overflow-y-auto">
-                    {dietPlan.recommendations.map((rec, index) => (
-                      <li key={index} className="flex items-start space-x-2">
-                        <CheckCircle className="h-4 w-4 text-green-400 mt-0.5 flex-shrink-0" />
-                        <span className="text-gray-300 text-sm">{rec}</span>
-                      </li>
                     ))}
-                  </ul>
-                </motion.div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
 
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.8, delay: 0.4 }}
-                  className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
-                >
-                  <h3 className="text-lg font-bold text-white mb-4 flex items-center space-x-2">
-                    <XCircle className="h-5 w-5 text-red-400" />
-                    <span>Kısıtlamalar</span>
-                  </h3>
-                  <ul className="space-y-2 max-h-48 overflow-y-auto">
-                    {dietPlan.restrictions.map((restriction, index) => (
-                      <li key={index} className="flex items-start space-x-2">
-                        <XCircle className="h-4 w-4 text-red-400 mt-0.5 flex-shrink-0" />
-                        <span className="text-gray-300 text-sm">{restriction}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </motion.div>
+            {/* Important Warning */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.7 }}
+              className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6"
+            >
+              <div className="flex items-start space-x-3">
+                <AlertCircle className="h-6 w-6 text-red-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-lg font-bold text-red-400 mb-2">Önemli Uyarı</h3>
+                  <p className="text-red-300 leading-relaxed">{aiResponse.importantWarning}</p>
+                </div>
               </div>
-
-              {/* Supplements */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.8, delay: 0.5 }}
-                className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-6"
-              >
-                <h3 className="text-lg font-bold text-white mb-4 flex items-center space-x-2">
-                  <Brain className="h-5 w-5 text-purple-400" />
-                  <span>Önerilen Takviyeler</span>
-                </h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  {dietPlan.supplements.map((supplement, index) => (
-                    <div key={index} className="bg-gray-700/30 rounded-lg p-3">
-                      <span className="text-gray-300 text-sm">{supplement}</span>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            </div>
+            </motion.div>
           </div>
 
           {/* Actions */}
           <div className="text-center mt-8 space-x-4">
             <button
-              onClick={downloadDietPlanPDF}
+              onClick={downloadAIPlanPDF}
               className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center space-x-2 inline-flex"
             >
               <Download className="h-5 w-5" />
@@ -505,10 +740,10 @@ const DietPlanPage: React.FC = () => {
           className="text-center mb-8"
         >
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-            AI Beslenme <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">Uzmanı</span>
+            AI Performans ve <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">Beslenme Koçu</span>
           </h1>
           <p className="text-gray-400 text-lg">
-            e-Nabız kan tahlili sonuçlarınızı yükleyerek kişiselleştirilmiş beslenme planınızı alın
+            e-Nabız kan tahlili sonuçlarınızı yükleyerek kişiselleştirilmiş 8 adımlı koçluk planınızı alın
           </p>
         </motion.div>
 
@@ -526,11 +761,10 @@ const DietPlanPage: React.FC = () => {
               <h2 className="text-2xl font-bold text-white mb-4">e-Nabız Kan Tahlili Yükle</h2>
               <p className="text-gray-400 mb-8">
                 e-Nabız sisteminden indirdiğiniz PDF formatındaki kan tahlili sonuçlarınızı yükleyerek 
-                AI destekli beslenme analizi alın
+                AI destekli 8 adımlı koçluk planı alın
               </p>
             </div>
 
-            {/* File Upload */}
             <div className="max-w-md mx-auto mb-8">
               <label className="block">
                 <input
@@ -580,27 +814,10 @@ const DietPlanPage: React.FC = () => {
                   className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center space-x-2 mx-auto"
                 >
                   <Brain className="h-6 w-6" />
-                  <span>e-Nabız Analizini Başlat</span>
+                  <span>AI Koç Analizini Başlat</span>
                 </button>
               </div>
             )}
-
-            {/* Instructions */}
-            <div className="mt-12 bg-gray-700/30 rounded-xl p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">e-Nabız Yükleme Talimatları:</h3>
-              <div className="grid md:grid-cols-2 gap-4 text-gray-300 text-sm">
-                <div className="space-y-2">
-                  <p>• e-Nabız sisteminden indirilen PDF dosyasını yükleyin</p>
-                  <p>• Dosya boyutu 10MB'dan küçük olmalıdır</p>
-                  <p>• Kan tahlili sonuçları net ve okunabilir olmalıdır</p>
-                </div>
-                <div className="space-y-2">
-                  <p>• Temel parametreler (glukoz, kolesterol, HbA1c, vb.) bulunmalıdır</p>
-                  <p>• Tarih ve hasta bilgileri görünür olmalıdır</p>
-                  <p>• Laboratuvar referans değerleri belirtilmelidir</p>
-                </div>
-              </div>
-            </div>
           </motion.div>
         )}
 
@@ -614,33 +831,32 @@ const DietPlanPage: React.FC = () => {
             <div className="w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
               <Brain className="h-12 w-12 text-white animate-pulse" />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-4">e-Nabız Analiz Ediliyor...</h2>
+            <h2 className="text-2xl font-bold text-white mb-4">AI Koç Analiz Ediyor...</h2>
             <p className="text-gray-400 mb-8">
-              e-Nabız kan tahlili sonuçlarınız yapay zeka tarafından analiz ediliyor. 
-              Bu işlem birkaç dakika sürebilir.
+              Kan tahlili, fiziksel veriler, hedefler ve antrenman programınız analiz ediliyor. 
+              8 adımlı kişiselleştirilmiş plan hazırlanıyor...
             </p>
             <div className="flex items-center justify-center space-x-2">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
               <span className="text-green-400 font-medium">İşleniyor...</span>
             </div>
             
-            {/* Progress Steps */}
             <div className="mt-8 space-y-3">
               <div className="flex items-center justify-center space-x-2 text-green-400">
                 <CheckCircle className="h-5 w-5" />
-                <span className="text-sm">e-Nabız PDF dosyası okundu</span>
+                <span className="text-sm">e-Nabız kan tahlili analiz edildi</span>
               </div>
               <div className="flex items-center justify-center space-x-2 text-green-400">
                 <CheckCircle className="h-5 w-5" />
-                <span className="text-sm">Kan parametreleri çıkarıldı</span>
+                <span className="text-sm">Fiziksel veriler ve hedefler işlendi</span>
               </div>
               <div className="flex items-center justify-center space-x-2 text-green-400">
                 <CheckCircle className="h-5 w-5" />
-                <span className="text-sm">Sağlık durumu analiz edildi</span>
+                <span className="text-sm">Antrenman programı entegre edildi</span>
               </div>
               <div className="flex items-center justify-center space-x-2 text-yellow-400">
                 <Clock className="h-5 w-5 animate-spin" />
-                <span className="text-sm">Kişiselleştirilmiş beslenme planı oluşturuluyor...</span>
+                <span className="text-sm">8 adımlı kişiselleştirilmiş plan oluşturuluyor...</span>
               </div>
             </div>
           </motion.div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Dumbbell, 
@@ -9,9 +9,14 @@ import {
   Download,
   Edit3,
   Save,
-  X
+  X,
+  AlertCircle,
+  User
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { Link } from 'react-router-dom';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import toast from 'react-hot-toast';
 import { generateWorkoutPlanPDF } from '../utils/pdfGenerator';
 
@@ -37,6 +42,8 @@ const WorkoutProgramPage: React.FC = () => {
   const [currentWeek, setCurrentWeek] = useState(0);
   const [editingExercise, setEditingExercise] = useState<string | null>(null);
   const [tempNotes, setTempNotes] = useState('');
+  const [hasBodyAnalysis, setHasBodyAnalysis] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Mock workout program data
   const [workoutProgram, setWorkoutProgram] = useState<WorkoutDay[]>([
@@ -111,34 +118,81 @@ const WorkoutProgramPage: React.FC = () => {
     }
   ]);
 
-  const toggleExerciseCompletion = (dayIndex: number, exerciseId: string) => {
-    setWorkoutProgram(prev => {
-      const newProgram = [...prev];
-      const exercise = newProgram[dayIndex].exercises.find(ex => ex.id === exerciseId);
-      if (exercise) {
-        exercise.completed = !exercise.completed;
-        
-        // Check if all exercises in the day are completed
-        const allCompleted = newProgram[dayIndex].exercises.every(ex => ex.completed);
-        newProgram[dayIndex].completed = allCompleted;
-        
-        if (exercise.completed) {
-          toast.success(`${exercise.name} tamamlandı!`);
+  useEffect(() => {
+    const checkBodyAnalysis = async () => {
+      if (user) {
+        try {
+          // Check if user has completed body analysis
+          const analysisDoc = await getDoc(doc(db, 'users', user.id, 'bodyAnalysis', 'current'));
+          setHasBodyAnalysis(analysisDoc.exists());
+          
+          // Load existing workout program if available
+          const workoutDoc = await getDoc(doc(db, 'users', user.id, 'workoutProgram', 'current'));
+          if (workoutDoc.exists()) {
+            setWorkoutProgram(workoutDoc.data().program);
+          }
+        } catch (error) {
+          console.error('Error checking body analysis:', error);
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        setIsLoading(false);
+      }
+    };
+
+    checkBodyAnalysis();
+  }, [user]);
+
+  const toggleExerciseCompletion = async (dayIndex: number, exerciseId: string) => {
+    const newProgram = [...workoutProgram];
+    const exercise = newProgram[dayIndex].exercises.find(ex => ex.id === exerciseId);
+    if (exercise) {
+      exercise.completed = !exercise.completed;
+      
+      // Check if all exercises in the day are completed
+      const allCompleted = newProgram[dayIndex].exercises.every(ex => ex.completed);
+      newProgram[dayIndex].completed = allCompleted;
+      
+      setWorkoutProgram(newProgram);
+      
+      // Save to Firestore
+      if (user) {
+        try {
+          await setDoc(doc(db, 'users', user.id, 'workoutProgram', 'current'), {
+            program: newProgram,
+            lastUpdated: new Date()
+          });
+        } catch (error) {
+          console.error('Error saving workout progress:', error);
         }
       }
-      return newProgram;
-    });
+      
+      if (exercise.completed) {
+        toast.success(`${exercise.name} tamamlandı!`);
+      }
+    }
   };
 
-  const saveExerciseNotes = (dayIndex: number, exerciseId: string) => {
-    setWorkoutProgram(prev => {
-      const newProgram = [...prev];
-      const exercise = newProgram[dayIndex].exercises.find(ex => ex.id === exerciseId);
-      if (exercise) {
-        exercise.notes = tempNotes;
+  const saveExerciseNotes = async (dayIndex: number, exerciseId: string) => {
+    const newProgram = [...workoutProgram];
+    const exercise = newProgram[dayIndex].exercises.find(ex => ex.id === exerciseId);
+    if (exercise) {
+      exercise.notes = tempNotes;
+      setWorkoutProgram(newProgram);
+      
+      // Save to Firestore
+      if (user) {
+        try {
+          await setDoc(doc(db, 'users', user.id, 'workoutProgram', 'current'), {
+            program: newProgram,
+            lastUpdated: new Date()
+          });
+        } catch (error) {
+          console.error('Error saving exercise notes:', error);
+        }
       }
-      return newProgram;
-    });
+    }
     setEditingExercise(null);
     setTempNotes('');
     toast.success('Not kaydedildi');
@@ -181,7 +235,67 @@ const WorkoutProgramPage: React.FC = () => {
 
   const todayIndex = getTodayIndex();
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
   if (!user) return null;
+
+  // Show prerequisite message if body analysis not completed
+  if (!hasBodyAnalysis) {
+    return (
+      <div className="min-h-screen bg-gray-900 py-8">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            className="text-center"
+          >
+            <div className="bg-gray-800/50 backdrop-blur-sm border border-gray-700 rounded-2xl p-12">
+              <div className="w-24 h-24 bg-gradient-to-r from-orange-500 to-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                <User className="h-12 w-12 text-white" />
+              </div>
+              <h1 className="text-3xl font-bold text-white mb-4">
+                Vücut Analizi Gerekli
+              </h1>
+              <p className="text-gray-400 text-lg mb-8">
+                Kişiselleştirilmiş antrenman programınızı oluşturmak için lütfen öncelikle vücut analizinizi tamamlayın.
+                AI destekli analiz sonucunda size özel bir program hazırlanacak.
+              </p>
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-8">
+                <div className="flex items-center space-x-2 justify-center">
+                  <AlertCircle className="h-5 w-5 text-yellow-400" />
+                  <span className="text-yellow-400 font-medium">
+                    Vücut analizi tamamlanmadan genel program gösterilmez
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <Link
+                  to="/vucut-analizi"
+                  className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center space-x-2"
+                >
+                  <Dumbbell className="h-5 w-5" />
+                  <span>Vücut Analizini Başlat</span>
+                </Link>
+                <Link
+                  to="/dashboard"
+                  className="border-2 border-gray-600 hover:border-gray-500 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 hover:bg-gray-800"
+                >
+                  Dashboard'a Dön
+                </Link>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-900 py-8">

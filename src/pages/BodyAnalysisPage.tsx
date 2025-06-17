@@ -12,6 +12,9 @@ import {
   Dumbbell,
   AlertCircle
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import toast from 'react-hot-toast';
 
 interface PhotoStep {
@@ -38,6 +41,7 @@ interface AnalysisResult {
 }
 
 const BodyAnalysisPage: React.FC = () => {
+  const { user } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [uploadedPhotos, setUploadedPhotos] = useState<{[key: number]: File}>({});
   const [validationResults, setValidationResults] = useState<{[key: number]: ValidationResult}>({});
@@ -153,7 +157,102 @@ const BodyAnalysisPage: React.FC = () => {
 
     setAnalysisResult(mockResult);
     setIsAnalyzing(false);
-    toast.success('Analiz tamamlandı!');
+
+    // Save analysis result to Firestore
+    if (user) {
+      try {
+        await setDoc(doc(db, 'users', user.id, 'bodyAnalysis', 'current'), {
+          result: mockResult,
+          photos: Object.keys(uploadedPhotos),
+          createdAt: new Date(),
+          userId: user.id
+        });
+        
+        // Also save a basic workout program based on analysis
+        const workoutProgram = generateWorkoutProgram(mockResult);
+        await setDoc(doc(db, 'users', user.id, 'workoutProgram', 'current'), {
+          program: workoutProgram,
+          createdAt: new Date(),
+          basedOnAnalysis: true
+        });
+        
+        toast.success('Analiz tamamlandı ve kaydedildi!');
+      } catch (error) {
+        console.error('Error saving analysis:', error);
+        toast.success('Analiz tamamlandı!');
+      }
+    } else {
+      toast.success('Analiz tamamlandı!');
+    }
+  };
+
+  const generateWorkoutProgram = (analysis: AnalysisResult) => {
+    // Generate a basic workout program based on analysis results
+    return [
+      {
+        day: 'Pazartesi',
+        focus: 'Push (Göğüs, Omuz, Triceps)',
+        completed: false,
+        exercises: [
+          { id: '1', name: 'Bench Press', sets: 4, reps: '8-10', completed: false, notes: '', restTime: '2-3 dk' },
+          { id: '2', name: 'Overhead Press', sets: 3, reps: '10-12', completed: false, notes: '', restTime: '2 dk' },
+          { id: '3', name: 'Dips', sets: 3, reps: '12-15', completed: false, notes: '', restTime: '90 sn' },
+          { id: '4', name: 'Tricep Extensions', sets: 3, reps: '12-15', completed: false, notes: '', restTime: '90 sn' }
+        ]
+      },
+      {
+        day: 'Salı',
+        focus: 'Pull (Sırt, Biceps)',
+        completed: false,
+        exercises: [
+          { id: '5', name: 'Pull-ups', sets: 4, reps: '6-10', completed: false, notes: '', restTime: '2-3 dk' },
+          { id: '6', name: 'Barbell Rows', sets: 4, reps: '8-10', completed: false, notes: '', restTime: '2-3 dk' },
+          { id: '7', name: 'Lat Pulldowns', sets: 3, reps: '10-12', completed: false, notes: '', restTime: '2 dk' },
+          { id: '8', name: 'Barbell Curls', sets: 3, reps: '10-12', completed: false, notes: '', restTime: '90 sn' }
+        ]
+      },
+      {
+        day: 'Çarşamba',
+        focus: 'Dinlenme',
+        completed: true,
+        exercises: []
+      },
+      {
+        day: 'Perşembe',
+        focus: 'Legs (Bacak)',
+        completed: false,
+        exercises: [
+          { id: '9', name: 'Squats', sets: 4, reps: '8-10', completed: false, notes: '', restTime: '3 dk' },
+          { id: '10', name: 'Romanian Deadlifts', sets: 4, reps: '8-10', completed: false, notes: '', restTime: '3 dk' },
+          { id: '11', name: 'Leg Press', sets: 3, reps: '12-15', completed: false, notes: '', restTime: '2 dk' },
+          { id: '12', name: 'Calf Raises', sets: 4, reps: '15-20', completed: false, notes: '', restTime: '60 sn' }
+        ]
+      },
+      {
+        day: 'Cuma',
+        focus: 'Core & Cardio',
+        completed: false,
+        exercises: [
+          { id: '13', name: 'Plank', sets: 3, reps: '30-60 sn', completed: false, notes: '', restTime: '60 sn' },
+          { id: '14', name: 'Russian Twists', sets: 3, reps: '20-30', completed: false, notes: '', restTime: '60 sn' },
+          { id: '15', name: 'Treadmill', sets: 1, reps: '20 dk', completed: false, notes: '', restTime: '-' }
+        ]
+      },
+      {
+        day: 'Cumartesi',
+        focus: 'Dinlenme veya Hafif Cardio',
+        completed: false,
+        exercises: [
+          { id: '16', name: 'Yürüyüş', sets: 1, reps: '30-45 dk', completed: false, notes: '', restTime: '-' }
+        ]
+      },
+      {
+        day: 'Pazar',
+        focus: 'Dinlenme',
+        completed: true,
+        exercises: []
+      }
+    ];
   };
 
   const resetAnalysis = () => {
@@ -274,10 +373,17 @@ const BodyAnalysisPage: React.FC = () => {
             </motion.div>
           </div>
 
-          <div className="text-center mt-8">
+          <div className="text-center mt-8 space-x-4">
+            <button
+              onClick={() => window.location.href = '/antrenman-programi'}
+              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 inline-flex items-center space-x-2"
+            >
+              <Dumbbell className="h-5 w-5" />
+              <span>Antrenman Programına Git</span>
+            </button>
             <button
               onClick={resetAnalysis}
-              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105"
+              className="border-2 border-gray-600 hover:border-gray-500 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 hover:bg-gray-800"
             >
               Yeni Analiz Yap
             </button>

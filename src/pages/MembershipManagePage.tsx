@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useForm } from 'react-hook-form';
+import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
+import { auth } from '../firebase';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
@@ -60,20 +62,30 @@ const MembershipManagePage: React.FC = () => {
     setIsChangingPassword(true);
     
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Mock password validation
-      if (data.currentPassword !== 'currentpass') {
-        toast.error('Mevcut şifre yanlış');
-        setIsChangingPassword(false);
+      const currentUser = auth.currentUser;
+      if (!currentUser || !currentUser.email) {
+        toast.error('Kullanıcı bilgileri bulunamadı');
         return;
       }
+
+      // Re-authenticate user
+      const credential = EmailAuthProvider.credential(currentUser.email, data.currentPassword);
+      await reauthenticateWithCredential(currentUser, credential);
+      
+      // Update password
+      await updatePassword(currentUser, data.newPassword);
       
       toast.success('Şifreniz başarıyla güncellendi');
       reset();
-    } catch (error) {
-      toast.error('Şifre güncellenirken bir hata oluştu');
+    } catch (error: any) {
+      console.error('Password change error:', error);
+      if (error.code === 'auth/wrong-password') {
+        toast.error('Mevcut şifre yanlış');
+      } else if (error.code === 'auth/weak-password') {
+        toast.error('Yeni şifre çok zayıf');
+      } else {
+        toast.error('Şifre güncellenirken bir hata oluştu');
+      }
     } finally {
       setIsChangingPassword(false);
     }

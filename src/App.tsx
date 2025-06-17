@@ -16,8 +16,10 @@ import DietPlanPage from './pages/DietPlanPage';
 import MembershipManagePage from './pages/MembershipManagePage';
 import WorkoutProgramPage from './pages/WorkoutProgramPage';
 import ProgressTrackingPage from './pages/ProgressTrackingPage';
+import ProfileAndGoalsPage from './pages/ProfileAndGoalsPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
+
 function App() {
   return (
     <AuthProvider>
@@ -38,6 +40,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <DashboardPage />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/profil-ve-hedefler" 
+              element={
+                <ProtectedRoute>
+                  <ProfileAndGoalsPage />
                 </ProtectedRoute>
               } 
             />

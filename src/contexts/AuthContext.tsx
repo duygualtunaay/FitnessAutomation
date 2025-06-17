@@ -5,21 +5,39 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
-  GoogleAuthProvider, // Google sağlayıcısını import et
-  signInWithPopup     // Popup ile giriş için import et
+  GoogleAuthProvider,
+  signInWithPopup
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
-// Projemizdeki kullanıcı modelini tanımlıyoruz
+// Enhanced User interface with new fields
 interface User {
-  id: string; // Firebase UID
+  id: string;
   name: string;
   email: string;
   role: 'member' | 'admin';
   membershipPlan: 'basic' | 'premium' | 'ai-plus';
   membershipExpiry: Date;
   avatar?: string;
+  // NEW FIELDS
+  physicalInfo?: {
+    age: number;
+    height: number;
+    weight: number;
+    gender: 'male' | 'female';
+  };
+  goals?: {
+    primaryGoal: string;
+    targetBodyFat?: number;
+    targetWeight?: number;
+  };
+  nutritionProfile?: {
+    preferences: string;
+    avoidances: string;
+    allergies: string;
+    dailyRoutine: string;
+  };
 }
 
 interface AuthContextType {
@@ -29,7 +47,8 @@ interface AuthContextType {
   register: (name: string, email: string, password: string) => Promise<boolean>;
   logout: () => void;
   isLoading: boolean;
-  loginWithGoogle: () => Promise<boolean>; // YENİ: Google ile giriş fonksiyonu tipi
+  loginWithGoogle: () => Promise<boolean>;
+  updateUserProfile: (updates: Partial<User>) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -66,6 +85,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             role: userData.role,
             membershipPlan: userData.membershipPlan,
             membershipExpiry: userData.membershipExpiry.toDate(),
+            physicalInfo: userData.physicalInfo || null,
+            goals: userData.goals || null,
+            nutritionProfile: userData.nutritionProfile || null,
           });
         }
       } else {
@@ -97,6 +119,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         role: 'member',
         membershipPlan: 'basic',
         membershipExpiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        physicalInfo: null,
+        goals: null,
+        nutritionProfile: null,
       };
       await setDoc(doc(db, 'users', newUser.uid), userData);
       return true;
@@ -106,32 +131,47 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  // YENİ FONKSİYON: Google ile giriş
   const loginWithGoogle = async (): Promise<boolean> => {
     const provider = new GoogleAuthProvider();
     try {
       const result = await signInWithPopup(auth, provider);
       const googleUser = result.user;
 
-      // Firestore'da bu kullanıcı var mı diye kontrol et
       const userDocRef = doc(db, 'users', googleUser.uid);
       const userDoc = await getDoc(userDocRef);
 
-      // Eğer kullanıcı veritabanında yoksa (ilk kez giriş yapıyorsa),
-      // onun için yeni bir profil oluşturalım.
       if (!userDoc.exists()) {
         const newUserProfile: Omit<User, 'id'> = {
           name: googleUser.displayName || 'Google Kullanıcısı',
           email: googleUser.email!,
           role: 'member',
-          membershipPlan: 'basic', // Yeni kullanıcılar için 7 günlük deneme
+          membershipPlan: 'basic',
           membershipExpiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          physicalInfo: null,
+          goals: null,
+          nutritionProfile: null,
         };
         await setDoc(userDocRef, newUserProfile);
       }
       return true;
     } catch (error) {
       console.error("Google ile giriş hatası:", error);
+      return false;
+    }
+  };
+
+  const updateUserProfile = async (updates: Partial<User>): Promise<boolean> => {
+    if (!user) return false;
+    
+    try {
+      const userDocRef = doc(db, 'users', user.id);
+      await updateDoc(userDocRef, updates);
+      
+      // Update local state
+      setUser(prev => prev ? { ...prev, ...updates } : null);
+      return true;
+    } catch (error) {
+      console.error("Profil güncelleme hatası:", error);
       return false;
     }
   };
@@ -147,7 +187,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     register,
     logout,
     isLoading,
-    loginWithGoogle, // YENİ: Değeri context'e ekle
+    loginWithGoogle,
+    updateUserProfile,
   };
 
   return <AuthContext.Provider value={value}>{!isLoading && children}</AuthContext.Provider>;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   TrendingUp, 
@@ -24,6 +24,10 @@ import { Line } from 'react-chartjs-2';
 import 'chartjs-adapter-date-fns';
 import { format, subDays, subMonths } from 'date-fns';
 import { tr } from 'date-fns/locale';
+import { useAuth } from '../contexts/AuthContext';
+import { collection, addDoc, query, orderBy, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+import toast from 'react-hot-toast';
 
 ChartJS.register(
   CategoryScale,
@@ -37,6 +41,7 @@ ChartJS.register(
 );
 
 interface ProgressEntry {
+  id?: string;
   date: string;
   weight: number;
   bodyFat?: number;
@@ -46,8 +51,10 @@ interface ProgressEntry {
 }
 
 const ProgressTrackingPage: React.FC = () => {
+  const { user } = useAuth();
   const [dateRange, setDateRange] = useState<'7days' | '1month' | 'all'>('1month');
   const [showAddEntry, setShowAddEntry] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [newEntry, setNewEntry] = useState({
     weight: '',
     bodyFat: '',
@@ -56,7 +63,6 @@ const ProgressTrackingPage: React.FC = () => {
     caloriesBurned: ''
   });
 
-  // Mock progress data
   const [progressData, setProgressData] = useState<ProgressEntry[]>([
     { date: '2024-01-01', weight: 75.5, bodyFat: 18.2, muscleMass: 35.8, workoutDuration: 45, caloriesBurned: 320 },
     { date: '2024-01-08', weight: 75.2, bodyFat: 17.9, muscleMass: 36.1, workoutDuration: 50, caloriesBurned: 350 },
@@ -67,6 +73,31 @@ const ProgressTrackingPage: React.FC = () => {
     { date: '2024-02-12', weight: 73.6, bodyFat: 16.2, muscleMass: 37.6, workoutDuration: 60, caloriesBurned: 425 },
     { date: '2024-02-19', weight: 73.3, bodyFat: 15.9, muscleMass: 37.9, workoutDuration: 55, caloriesBurned: 400 },
   ]);
+
+  useEffect(() => {
+    loadProgressData();
+  }, [user]);
+
+  const loadProgressData = async () => {
+    if (!user) return;
+
+    try {
+      const progressRef = collection(db, 'users', user.id, 'progress');
+      const q = query(progressRef, orderBy('date', 'asc'));
+      const querySnapshot = await getDocs(q);
+      
+      const loadedData: ProgressEntry[] = [];
+      querySnapshot.forEach((doc) => {
+        loadedData.push({ id: doc.id, ...doc.data() } as ProgressEntry);
+      });
+
+      if (loadedData.length > 0) {
+        setProgressData(loadedData);
+      }
+    } catch (error) {
+      console.error('Error loading progress data:', error);
+    }
+  };
 
   const getFilteredData = () => {
     const now = new Date();
@@ -220,25 +251,42 @@ const ProgressTrackingPage: React.FC = () => {
     },
   };
 
-  const handleAddEntry = () => {
-    const entry: ProgressEntry = {
-      date: new Date().toISOString().split('T')[0],
-      weight: parseFloat(newEntry.weight),
-      bodyFat: newEntry.bodyFat ? parseFloat(newEntry.bodyFat) : undefined,
-      muscleMass: newEntry.muscleMass ? parseFloat(newEntry.muscleMass) : undefined,
-      workoutDuration: parseInt(newEntry.workoutDuration),
-      caloriesBurned: parseInt(newEntry.caloriesBurned)
-    };
+  const handleAddEntry = async () => {
+    if (!user) return;
 
-    setProgressData(prev => [...prev, entry].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
-    setNewEntry({
-      weight: '',
-      bodyFat: '',
-      muscleMass: '',
-      workoutDuration: '',
-      caloriesBurned: ''
-    });
-    setShowAddEntry(false);
+    setIsLoading(true);
+    try {
+      const entry: Omit<ProgressEntry, 'id'> = {
+        date: new Date().toISOString().split('T')[0],
+        weight: parseFloat(newEntry.weight),
+        bodyFat: newEntry.bodyFat ? parseFloat(newEntry.bodyFat) : undefined,
+        muscleMass: newEntry.muscleMass ? parseFloat(newEntry.muscleMass) : undefined,
+        workoutDuration: parseInt(newEntry.workoutDuration),
+        caloriesBurned: parseInt(newEntry.caloriesBurned)
+      };
+
+      // Save to Firestore
+      const progressRef = collection(db, 'users', user.id, 'progress');
+      await addDoc(progressRef, entry);
+
+      // Update local state
+      setProgressData(prev => [...prev, entry].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
+      
+      setNewEntry({
+        weight: '',
+        bodyFat: '',
+        muscleMass: '',
+        workoutDuration: '',
+        caloriesBurned: ''
+      });
+      setShowAddEntry(false);
+      toast.success('Veri başarıyla kaydedildi!');
+    } catch (error) {
+      console.error('Error adding progress entry:', error);
+      toast.error('Veri kaydedilirken bir hata oluştu');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const getLatestStats = () => {
@@ -335,7 +383,7 @@ const ProgressTrackingPage: React.FC = () => {
               <div className="text-gray-400 text-sm">Kas Kütlesi</div>
               {stats.changes && (
                 <div className={`text-xs mt-1 ${stats.changes.muscleMass >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {stats.changes.muscleMass >= 0 ? '+' : ''}{stats.changes.muscleMass.toFixed(1)} kg
+                  {stats.changes.muscleMass >= 0 ? '+' : ''}{stats.changes.muscl eMass.toFixed(1)} kg
                 </div>
               )}
             </div>
@@ -497,10 +545,17 @@ const ProgressTrackingPage: React.FC = () => {
                 </button>
                 <button
                   onClick={handleAddEntry}
-                  disabled={!newEntry.weight || !newEntry.workoutDuration || !newEntry.caloriesBurned}
-                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 px-4 py-3 rounded-lg text-white font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!newEntry.weight || !newEntry.workoutDuration || !newEntry.caloriesBurned || isLoading}
+                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 px-4 py-3 rounded-lg text-white font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
-                  Ekle
+                  {isLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      <span>Kaydediliyor...</span>
+                    </>
+                  ) : (
+                    <span>Ekle</span>
+                  )}
                 </button>
               </div>
             </motion.div>
